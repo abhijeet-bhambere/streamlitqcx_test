@@ -1,12 +1,13 @@
 import base64
 import io
+import string
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 import time
 import altair as alt
+import openpyxl
 import os
-
 # # Disable XSRF protection (only do this if your app is running locally and not exposed to the internet)
 # st.set_option('server.enableXsrfProtection', False)
 
@@ -30,16 +31,45 @@ st.divider()
 with col1:
     st.image(image=imagepath,output_format="JPEG",width=110)
 with col2:
-    st.title("THE PROJECT QCx")
-    
+    # st.title("QCx Portal")
+    st.markdown('<p style="font-size:80px;font-weight:100">QCx Portal</p>',unsafe_allow_html=True)
+
+# ======================Help section=======================
+with st.expander(label="Help content/ How to use",icon=":material/help:"):
+    help_col1, help_col2 = st.columns(2)
+    help_markdown1 = '''
+    ## Step 1: 
+    In first section, upload the CDT summary extract (the .CSV file) downloaded from your Admin Portal site.
+    Whenever you want to upload a new CSV, **ensure you delete the previous CSV**.
+
+    ## Step 2:
+    Once CSV upload is successful, navigate to Sections 2 for data model summary. 
+    OR head over to Section 3 that contains AssetVsPoint view and detailed CDT QC checks
+    '''
+    help_markdown2 = '''
+    ## Step 3:
+    1. In the 'Classic AvP View' tab user can view the AssetVsPoint view that we're all familiar with. Select the required Asset Type to view the Asset vs Point map.
+    2. 'Standard Point Role Checks' maps all the **mandatory** point role combinations pre-configured (e.g. ZoneTempSensor-Sp ; SupplyFanCmd-Sts ; FanSpdCmd-Fbk etc.).\n
+        Select the required point-combination to be checked & view all Assets with selected point role combination against it.\n
+        Point role gaps can then be either addressed by analyst or shared as RFI to site team. 
+    '''
+
+    with help_col1:
+        st.markdown(help_markdown1)
+    with help_col2:
+        st.markdown(help_markdown2)    
+
+
 # ======Take user input -- the CSV file======
-st.subheader("1. Upload CDT extract",help="Upload the .CSV CDT extract. Please ensure file size <200MB")
+st.subheader("1. Upload CDT extract",help="Upload the .CSV CDT extract. Ensure file size <200MB.")
 ui_col1,ui_col2,ui_col3 = st.columns([3,1,2])
 # =====UI section for CSV upload
 with ui_col1:
     upload_csv = st.file_uploader("",type="csv")
 # =====UI for progress
 with ui_col2:
+    st.write("")
+    st.write("")
     if upload_csv is not None:
         # ======Loading UI
         progress_bar_anm("CSV upload in progress")
@@ -61,7 +91,7 @@ if upload_csv is not None:
     # Function to highlight cells containing a comma
     def highlight_commas(val):
         if '|' in str(val):
-            return 'background-color: #f06543'  # Highlight cells with yellow background
+            return 'background-color: #e76f51'  # Highlight cells for multiple points-single role
         return ''
 
     # The AsstVsPoint classic view
@@ -80,7 +110,7 @@ st.subheader("2. Data Model Summary",help="Shows a high-level overview of the da
 dms_col1,dms_col2= st.columns(2)
 # =====DMS column 1
 with dms_col1:
-    # First Expander
+    # First Expander -- Asset-wise breakup
     with st.expander(label="See Asset-wise breakup of model"):
 
         if upload_csv is not None:
@@ -101,7 +131,7 @@ with dms_col1:
                 
         else:
             st.info("Awaiting inputs",icon=":material/pending:")
-    # Second Expander
+    # Second Expander -- Point-by-AssetType breakup
     with st.expander(label="See Point distribution by Asset Type"):
         st.write("N/a coming soon")
 # ======DMS column 2
@@ -121,13 +151,34 @@ with dms_col2:
 #     st.write('')
 # st.divider()
 # ======introducing tabs======
-# ======Classic AvP view======
+# ==============================Classic AvP view====================================
 st.subheader("3. Different Tabs")
-tab1, tab2, tab3, tab4 = st.tabs(["Classic AvP view", "Point Role Analysis","QC Checklist","ZOOTR Analysis"])
+tab1, tab2, tab3, tab4 = st.tabs(["Classic AvP view", "Point Role Analysis","QC CheckPoints","ZOOTR Analysis"])
+
+
 with tab1:
-    if upload_csv is not None:
-        progress_bar_anm("Loading Asset Vs Point view please wait..")
-        st.write(styled_classic_view)
+    # if upload_csv is not None:
+    #     progress_bar_anm("Loading Asset Vs Point view please wait..")
+        
+    
+    tab1col1, tab1col2 = st.columns([1,3])
+    # Select the Asset Type
+    with tab1col1:
+        if upload_csv is not None:
+            all_assetTypes = main_df["Asset Type"].unique()
+            selected_assetType = st.multiselect(label='Select AssetType',options=all_assetTypes)
+            # Selection logic for AssetType
+            styled_classic_view1 = classic_view.set_index(["Asset Type","Asset Name"])
+            selected_AvP = styled_classic_view1.loc[selected_assetType].dropna(axis=1,how='all')
+            final_AvP=selected_AvP.style.applymap(highlight_commas)
+    
+    # Show AssetvPoint table for the selected AssetType
+    with tab1col2:
+        if (upload_csv is not None) and len(selected_assetType)!=0:
+            progress_bar_anm("Loading Asset Vs Point view please wait..")
+            st.write(final_AvP)
+        elif (upload_csv is not None) and len(selected_assetType)==0:
+            st.info("Select Asset Type from the filter",icon=":material/pending:")
 # ======Point detail analysis======
 
 with tab2:
@@ -181,17 +232,51 @@ with tab2:
         disp_selected = st.dataframe(final_selected_pointRole_pair,width=1000)
 
 
-# ======QC Checklist======
+# ======================QC Checklist============================
 with tab3:
-    with st.expander("Point & Asset Naming Conventions"):
-        st.write("somethin'")
-    with st.expander("Assets containing 1 point records"):
-        st.write("somethin'")
+    special_chars = list(string.punctuation)
+    allowed_chars = ["-","_"]
+    special_chars = list(filter(lambda x: x not in allowed_chars,special_chars))
+    # =========Logic for Equip Name checks
+    st.subheader("Asset Name Check",help="Checks if Asset Name contains any special characters. Only '-' &'_' are allowed")
+    qc_checkBtn = st.button("Run QC Checks")
+    if (upload_csv is not None) & (qc_checkBtn):
+        
+        with st.status(label="Checking for Asset Names") as fstatus:
+            fstatus.update(label="Ensuring all equips are checked...")
+            time.sleep(2)
+            all_assets = main_df["Asset Name"].unique().tolist()
+            for element in all_assets:
+                for char in special_chars:
+                    if char in element:
+                        st.write(f"Asset '{element}' contains special character '{char}'.")
+                        break  # Stop checking further once a special character is found
 
+            fstatus.update(label="Checking for special characters...")
+            time.sleep(2)
+            fstatus.update(label="Only '-' & '_' allowed...")
+            time.sleep(1)
+            fstatus.update(label="Complete!")
+
+    # with st.expander("Assets containing 1 point records"):
+    #     st.write("somethin'")
+    # with st.status("Downloading data...") as fstatus:
+    #     st.write("Searching for data...")
+    #     time.sleep(2)
+    #     st.write("Found URL.")
+    #     time.sleep(1)
+    #     st.write("Downloading data...")
+    #     time.sleep(1)
+    #     fstatus.update(label="Complete!")
+    # st.button("Check Asset ")
+    # =========Logic for Equip Name Length
+    # =========Logic for Equips with only one point configured (excluding meters)
 # ======ZOOTR Analysis
 with tab4:
+    st.write(":construction: Coming soon :construction:")
     with st.expander("Checks for comfortAsset()"):
         
         thisList = [n for n in range(1,11)]
         thatlist = st.multiselect(label="Select options",options=thisList)
         st.dataframe(thatlist)
+
